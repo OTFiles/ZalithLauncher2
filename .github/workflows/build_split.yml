@@ -52,13 +52,6 @@ jobs:
   # ============================================================
   client:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - abi: arm64-v8a
-            apk: ZalithClient-2.7.1-arm64-v8a.apk
-          - abi: armeabi-v7a
-            apk: ZalithClient-2.7.1-armeabi-v7a.apk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,30 +68,30 @@ jobs:
           cache-read-only: false
           add-job-summary: "on-failure"
 
-      - name: Build client APK (${{ matrix.abi }})
+      - name: Build client APKs (arm64-v8a + armeabi-v7a)
         run: |
           chmod +x gradlew
           ./gradlew :ZalithClient:assembleRelease --stacktrace
 
-      - name: Collect APK
+      - name: Collect APKs
         run: |
           mkdir -p out
           find ZalithClient/build/outputs/apk/release -name "*.apk" -exec cp {} out/ \;
           ls -lh out
-          # 规范化文件名，方便用户直接下载
-          for f in out/*.apk; do
-            case "$f" in
-              *armeabi-v7a*) mv "$f" "out/${{ matrix.apk }}" ;;
-              *arm64-v8a*)   mv "$f" "out/${{ matrix.apk }}" ;;
-            esac
-          done
-          ls -lh out
+          test "$(find out -name '*.apk' | wc -l)" -ge 2
 
-      - name: Upload client APK
+      - name: Upload client APK (arm64-v8a)
         uses: actions/upload-artifact@v4
         with:
-          name: ZalithClient-${{ matrix.abi }}
-          path: out/*.apk
+          name: ZalithClient-arm64-v8a
+          path: out/*arm64-v8a*.apk
+          if-no-files-found: error
+
+      - name: Upload client APK (armeabi-v7a)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZalithClient-armeabi-v7a
+          path: out/*armeabi-v7a*.apk
           if-no-files-found: error
 
   # ============================================================

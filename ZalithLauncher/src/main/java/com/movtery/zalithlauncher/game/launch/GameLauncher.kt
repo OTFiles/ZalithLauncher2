@@ -19,6 +19,7 @@
 package com.movtery.zalithlauncher.game.launch
 
 import android.app.Activity
+import android.content.Context
 import android.os.Build
 import android.os.Parcelable
 import android.widget.Toast
