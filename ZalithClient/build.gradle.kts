@@ -29,13 +29,9 @@ android {
         targetSdk = 34
         versionCode = 200045
         versionName = "2.7.1"
-        //arm32 与 arm64 同时支持
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
     }
 
-    //客户端只有一个变体，直接输出固定名字的 APK
+    //arm32 与 arm64 各出一个 APK，注意不能和 abiFilters 同时使用
     splits {
         abi {
             isEnable = true
