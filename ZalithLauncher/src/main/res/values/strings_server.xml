@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 服务端名称，与原版 Zalith Launcher 区分开 -->
+    <string name="app_server_name">ZL2 服务端</string>
+
+    <string name="server_notification_channel">串流服务</string>
+    <string name="server_notification_channel_desc">远程串流与游戏进程保活</string>
+    <string name="server_notification_stopped">服务未运行</string>
+    <string name="server_notification_playing">正在运行 %1$s</string>
+    <string name="server_notification_idle">等待客户端连接（%1$s）</string>
+    <string name="server_notification_stop">停止</string>
+</resources>

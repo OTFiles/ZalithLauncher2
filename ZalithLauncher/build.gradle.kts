@@ -14,6 +14,8 @@ plugins {
 }
 
 val zalithPackageName = "com.movtery.zalithlauncher"
+val serverPackageName = "$zalithPackageName.server"
+
 val launcherAPPName = project.findProperty("launcher_app_name") as? String ?: error("The \"launcher_app_name\" property is not set in gradle.properties.")
 val launcherName = project.findProperty("launcher_name") as? String ?: error("The \"launcher_name\" property is not set in gradle.properties.")
 val launcherShortName = project.findProperty("launcher_short_name") as? String ?: error("The \"launcher_short_name\" property is not set in gradle.properties.")
@@ -64,8 +66,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = zalithPackageName
-        applicationIdSuffix = ".v2"
+        //服务端独立包名，可以和原版 Zalith Launcher 2 共存
+        applicationId = serverPackageName
         minSdk = 26
         targetSdk = 34
         versionCode = launcherVersionCode
@@ -75,9 +77,10 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
-            signingConfig = signingConfigs.getByName("releaseBuild")
+            isMinifyEnabled = false
+            isShrinkResources = false
+            //CI 没有 release 签名，统一使用仓库内自带的调试签名
+            signingConfig = signingConfigs.getByName("debugBuild")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -85,7 +88,6 @@ android {
         }
         debug {
             isMinifyEnabled = false
-            applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             signingConfig = signingConfigs.getByName("debugBuild")
         }
@@ -146,43 +148,44 @@ androidComponents {
             if (output is VariantOutputImpl) {
                 val variantName = variant.name.replaceFirstChar { it.uppercaseChar() }
                 afterEvaluate {
-                    val task = tasks.named("merge${variantName}Assets").get() as MergeSourceSetFolders
-                    task.inputs.property("lwjglArch", projectArch)
-                    task.doLast {
-                        val assetsDir = task.outputDir.get().asFile
-                        val tag = "JREAssetsCleanup"
-                        logger.lifecycle("[$tag] arch: $projectArch")
-                        val jreList = listOf("jre-8", "jre-17", "jre-21", "jre-25")
-                        jreList.forEach { jreVersion ->
-                            val runtimeDir = File("$assetsDir/runtimes/$jreVersion")
-                            logger.lifecycle("[$tag] runtimeDir: ${runtimeDir.absolutePath}")
-                            runtimeDir.listFiles()?.forEach {
-                                if (projectArch != "all" && it.name != "version" && !it.name.contains("universal") && it.name != "bin-$projectArch.tar.xz") {
-                                    logger.lifecycle("[$tag] delete: $it : ${it.delete()}")
+                    val task = tasks.findByName("merge${variantName}Assets") as? MergeSourceSetFolders
+                    task?.let { mergeTask ->
+                        mergeTask.inputs.property("lwjglArch", projectArch)
+                        mergeTask.doLast {
+                            val assetsDir = mergeTask.outputDir.get().asFile
+                            val tag = "JREAssetsCleanup"
+                            logger.lifecycle("[$tag] arch: $projectArch")
+                            val jreList = listOf("jre-8", "jre-17", "jre-21", "jre-25")
+                            jreList.forEach { jreVersion ->
+                                val runtimeDir = File("$assetsDir/runtimes/$jreVersion")
+                                runtimeDir.listFiles()?.forEach {
+                                    if (projectArch != "all" && it.name != "version" && !it.name.contains("universal") && it.name != "bin-$projectArch.tar.xz") {
+                                        logger.lifecycle("[$tag] delete: $it : ${it.delete()}")
+                                    }
                                 }
                             }
-                        }
 
-                        if (projectArch == "all") return@doLast
-                        val abi = when (projectArch) {
-                            "arm" -> "armeabi-v7a"
-                            "arm64" -> "arm64-v8a"
-                            "x86" -> "x86"
-                            "x86_64" -> "x86_64"
-                            else -> return@doLast
-                        }
-                        val lwjglVersions = file("libs").listFiles { f ->
-                            f.name.matches(Regex("lwjgl-\\d+\\.\\d+\\.\\d+-natives-release\\.aar"))
-                        }
-                            ?.map { Regex("lwjgl-(\\d+\\.\\d+\\.\\d+)-natives-release\\.aar").find(it.name)!!.groupValues[1] }
-                            ?: emptyList()
-                        lwjglVersions.forEach { version ->
-                            val nativesDir = File(assetsDir, "app_runtime/lwjgl/$version/natives")
-                            if (nativesDir.isDirectory) {
-                                nativesDir.listFiles()?.forEach { dir ->
-                                    if (dir.isDirectory && dir.name != abi) {
-                                        logger.lifecycle("Removing non-target-arch natives: $dir")
-                                        dir.deleteRecursively()
+                            if (projectArch == "all") return@doLast
+                            val abi = when (projectArch) {
+                                "arm" -> "armeabi-v7a"
+                                "arm64" -> "arm64-v8a"
+                                "x86" -> "x86"
+                                "x86_64" -> "x86_64"
+                                else -> return@doLast
+                            }
+                            val lwjglVersions = file("libs").listFiles { f ->
+                                f.name.matches(Regex("lwjgl-\\d+\\.\\d+\\.\\d+-natives-release\\.aar"))
+                            }
+                                ?.map { Regex("lwjgl-(\\d+\\.\\d+\\.\\d+)-natives-release\\.aar").find(it.name)!!.groupValues[1] }
+                                ?: emptyList()
+                            lwjglVersions.forEach { version ->
+                                val nativesDir = File(assetsDir, "app_runtime/lwjgl/$version/natives")
+                                if (nativesDir.isDirectory) {
+                                    nativesDir.listFiles()?.forEach { dir ->
+                                        if (dir.isDirectory && dir.name != abi) {
+                                            logger.lifecycle("Removing non-target-arch natives: $dir")
+                                            dir.deleteRecursively()
+                                        }
                                     }
                                 }
                             }
@@ -191,14 +194,14 @@ androidComponents {
                 }
 
                 (output.getFilter(ABI)?.identifier ?: "all").let { abi ->
-                    val baseName = "$launcherName-${if (variant.buildType == "release") launcherVersionName else "Debug-$launcherVersionName"}"
-                    output.outputFileName = if (abi == "all") "$baseName.apk" else "$baseName-$abi.apk"
+                    val baseName = "ZalithServer-${launcherVersionName}"
+                    val suffix = if (variant.buildType == "release") "" else "-debug"
+                    output.outputFileName = if (abi == "all") "$baseName$suffix.apk" else "$baseName$suffix-$abi.apk"
                 }
             }
         }
     }
 }
-
 
 kotlin {
     compilerOptions {
@@ -264,6 +267,7 @@ dependencies {
     implementation(project(":Terracotta"))
     implementation(project(":InputMap"))
     implementation(project(":Guide"))
+    implementation(project(":StreamCore"))
     //Utils
     implementation(libs.bytehook)
     implementation(libs.gson)

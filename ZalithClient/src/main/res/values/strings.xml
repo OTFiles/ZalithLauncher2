@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_client_name">ZL2 客户端</string>
+    <string name="client_title">Zalith 串流客户端</string>
+    <string name="client_host">服务器地址</string>
+    <string name="client_host_hint">192.168.1.100 或 example.com</string>
+    <string name="client_port">端口</string>
+    <string name="client_password">访问口令（可留空）</string>
+    <string name="client_connect">连接</string>
+    <string name="client_disconnect">断开</string>
+    <string name="client_connecting">正在连接…</string>
+    <string name="client_connected">已连接</string>
+    <string name="client_error">连接失败</string>
+    <string name="client_state_idle">服务端空闲，请先在服务端启动游戏</string>
+    <string name="client_state_launching">服务端正在启动游戏…</string>
+    <string name="client_state_running">游戏运行中</string>
+    <string name="client_state_stopped">游戏已退出</string>
+    <string name="client_state_error">服务端出错</string>
+    <string name="client_touch_direct">直接触摸</string>
+    <string name="client_touch_capture">视角模式</string>
+    <string name="client_show_controls">虚拟按键</string>
+    <string name="client_stats">%1$d fps · %2$d kbps</string>
+    <string name="client_no_video">等待画面…</string>
+    <string name="client_keyboard">键盘</string>
+    <string name="client_send_text">发送文本</string>
+    <string name="client_menu">菜单</string>
+    <string name="client_hint">单指拖动=转动视角 · 双指=移动/翻滚 · 长按=右键</string>
+</resources>

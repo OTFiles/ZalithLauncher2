@@ -1,0 +1,128 @@
+name: Build Server & Client
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  # ============================================================
+  # 服务端：在性能较好的设备上运行游戏并串流出去
+  # ============================================================
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+          add-job-summary: "on-failure"
+
+      - name: Build server APK
+        run: |
+          chmod +x gradlew
+          #arm64 + armeabi-v7a 合并进同一个 APK
+          ./gradlew :ZalithLauncher:assembleRelease -Darch=all --stacktrace
+
+      - name: Upload server APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZalithServer
+          path: ZalithLauncher/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+  # ============================================================
+  # 客户端：低配设备用，arm32/arm64 各一个 APK
+  # ============================================================
+  client:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - abi: arm64-v8a
+            apk: ZalithClient-2.7.1-arm64-v8a.apk
+          - abi: armeabi-v7a
+            apk: ZalithClient-2.7.1-armeabi-v7a.apk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+          add-job-summary: "on-failure"
+
+      - name: Build client APK (${{ matrix.abi }})
+        run: |
+          chmod +x gradlew
+          ./gradlew :ZalithClient:assembleRelease --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          find ZalithClient/build/outputs/apk/release -name "*.apk" -exec cp {} out/ \;
+          ls -lh out
+          # 规范化文件名，方便用户直接下载
+          for f in out/*.apk; do
+            case "$f" in
+              *armeabi-v7a*) mv "$f" "out/${{ matrix.apk }}" ;;
+              *arm64-v8a*)   mv "$f" "out/${{ matrix.apk }}" ;;
+            esac
+          done
+          ls -lh out
+
+      - name: Upload client APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZalithClient-${{ matrix.abi }}
+          path: out/*.apk
+          if-no-files-found: error
+
+  # ============================================================
+  # 发布时把两个 APK 一起挂到 Release
+  # ============================================================
+  publish:
+    needs: [server, client]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Collect APKs
+        run: |
+          mkdir -p apks
+          find ./artifacts -name "*.apk" -type f -exec cp {} apks/ \;
+          ls -lh apks
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: apks/*.apk
+          fail_on_unmatched_files: true

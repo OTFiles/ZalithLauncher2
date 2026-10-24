@@ -77,11 +77,16 @@ class LaunchConfig(
 ): Parcelable
 
 class GameLauncher(
-    private val activity: Activity,
+    context: Context,
     config: LaunchConfig,
     onExit: (code: Int, isSignal: Boolean) -> Unit,
     openPath: (folder: File) -> Unit
 ) : Launcher(onExit, openPath) {
+    /**
+     * 启动器持有的上下文。
+     * 串流服务端没有游戏界面，此时传入的是 Service 的上下文而非 Activity。
+     */
+    private val activity: Context = context
     private lateinit var gameManifest: GameManifest
     private var jnaDir: File? = null
     private val offlineServer = OfflineYggdrasilServer(0)
@@ -351,7 +356,7 @@ class GameLauncher(
                 if (runtime0 != null) {
                     return runtime0
                 } else {
-                    activity.runOnUiThread {
+                    (activity as? Activity)?.runOnUiThread {
                         Toast.makeText(activity, activity.getString(R.string.game_auto_pick_runtime_failed), Toast.LENGTH_SHORT).show()
                     }
                 }
