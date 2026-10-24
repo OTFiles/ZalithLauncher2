@@ -202,7 +202,7 @@ class VMViewModel : ViewModel() {
                     ?: throw IllegalStateException("No launch config has been set.")
 
                 val launcher = GameLauncher(
-                    activity = activity,
+                    context = activity,
                     config = config,
                     onExit = { code, isSignal ->
                         if (code == 0) {
