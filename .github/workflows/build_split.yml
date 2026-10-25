@@ -83,6 +83,21 @@ jobs:
           echo "$BADGING" | grep -q 'android.permission.INTERNET' \
             || { echo "::error::missing INTERNET permission"; exit 1; }
 
+      - name: Server APK report
+        run: |
+          APK=$(find ZalithLauncher/build/outputs/apk/release -name '*.apk' | head -1)
+          AAPT=$(ls $ANDROID_HOME/build-tools/*/aapt2 | tail -1)
+          {
+            echo "## Server APK"
+            echo '```'
+            ls -l "$APK"
+            sha256sum "$APK"
+            "$AAPT" dump badging "$APK" | grep -E '^(package|native-code|sdkVersion|targetSdkVersion|uses-permission)'
+            echo '--- components ---'
+            "$AAPT" dump xmltree --file AndroidManifest.xml "$APK" | grep -E 'E: (activity|activity-alias|service|receiver|action)|A: http://schemas.android.com/apk/res/android:name' | grep -iE 'server|SETTINGS|BOOT|alias' | head -40
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
       - name: Upload server APK
         uses: actions/upload-artifact@v4
         with:
@@ -135,6 +150,21 @@ jobs:
           # 客户端必须有桌面图标
           echo "$BADGING" | grep -q "launchable-activity" \
             || { echo "::error::client must be launchable"; exit 1; }
+
+      - name: Client APK report
+        run: |
+          APK=$(find ZalithClient/build/outputs/apk/release -name '*.apk' | head -1)
+          AAPT=$(ls $ANDROID_HOME/build-tools/*/aapt2 | tail -1)
+          {
+            echo "## Client APK"
+            echo '```'
+            ls -l "$APK"
+            sha256sum "$APK"
+            "$AAPT" dump badging "$APK" | grep -E '^(package|native-code|sdkVersion|targetSdkVersion|launchable-activity)'
+            echo '--- libs ---'
+            unzip -l "$APK" | grep -E 'lib/|classes.*dex'
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Upload client APK
         uses: actions/upload-artifact@v4
