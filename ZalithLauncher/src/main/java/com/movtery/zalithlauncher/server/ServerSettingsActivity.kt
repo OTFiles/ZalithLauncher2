@@ -102,7 +102,8 @@ class ServerSettingsActivity : ComponentActivity() {
         val manager = getSystemService(android.media.projection.MediaProjectionManager::class.java)
         if (result.resultCode == RESULT_OK && data != null && manager != null) {
             runCatching {
-                val projection = manager.getMediaProjection(result.resultCode, data)
+                //getMediaProjection 在某些 ROM 上会返回 null
+                val projection = manager.getMediaProjection(result.resultCode, data) ?: return@runCatching
                 ServerStreamEngine.instance.mediaProjection = projection
                 projection.registerCallback(
                     object : android.media.projection.MediaProjection.Callback() {
