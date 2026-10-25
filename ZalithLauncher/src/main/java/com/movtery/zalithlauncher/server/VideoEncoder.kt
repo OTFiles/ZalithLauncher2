@@ -92,7 +92,7 @@ class VideoEncoder(
                     setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
                 }
             }
-            val codec = MediaCodec.createEncoderByType(MIME_H264)
+            val codec = createCodec()
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             val surface = codec.createInputSurface()
             codec.start()
@@ -105,6 +105,27 @@ class VideoEncoder(
             Log.e(TAG, "Failed to start the H.264 encoder", it)
             onError(it)
         }.getOrNull()
+    }
+
+    /**
+     * 优先选硬件编码器，不行再退回软件编码器。
+     * 有些低端机的 OMX 编码器对 KEY_LATENCY 之类的键不认账，直接换一个。
+     */
+    private fun createCodec(): MediaCodec {
+        val hardware = runCatching {
+            val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+            list.codecInfos.firstOrNull { info ->
+                info.isHardwareAccelerated &&
+                        info.isEncoder &&
+                        info.supportedTypes.any { it.equals(MIME_H264, ignoreCase = true) }
+            }
+        }.getOrNull()
+        if (hardware != null) {
+            runCatching {
+                return MediaCodec.createByCodecName(hardware.name)
+            }.onFailure { Log.w(TAG, "Hardware encoder ${hardware.name} failed, falling back", it) }
+        }
+        return MediaCodec.createEncoderByType(MIME_H264)
     }
 
     /**
@@ -144,13 +165,24 @@ class VideoEncoder(
                                 val data = ByteArray(info.size)
                                 buffer.get(data)
                                 if ((info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                    //csd 只在格式变化时出现，缓存起来供新客户端使用
                                     cacheParameterSets(data)
-                                } else if ((info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
-                                    frameProduced.incrementAndGet()
-                                    onAccessUnit(data)
                                 } else {
                                     frameProduced.incrementAndGet()
-                                    onAccessUnit(data)
+                                    val isKeyFrame =
+                                        (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 ||
+                                                containsKeyFrame(data)
+                                    //有些编码器不单独发 csd，参数集只出现在关键帧里
+                                    if (isKeyFrame && (sps == null || pps == null)) {
+                                        cacheParameterSets(data)
+                                    }
+                                    //关键帧前拼上 SPS/PPS，客户端从任意位置接入都能解码
+                                    val payload = if (isKeyFrame) {
+                                        parameterSets()?.let { sets -> sets + data } ?: data
+                                    } else {
+                                        data
+                                    }
+                                    onAccessUnit(payload)
                                 }
                             }
                             codec.releaseOutputBuffer(index, false)

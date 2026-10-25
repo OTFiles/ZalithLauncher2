@@ -42,6 +42,9 @@ object ServerSettings {
     private const val KEY_AUTO_LAUNCH_GAME = "stream_server_auto_launch_game"
     private const val KEY_LAST_VERSION = "stream_server_last_version"
     private const val KEY_SERVER_ENABLED = "stream_server_enabled"
+    private const val KEY_JVM_USED = "stream_server_jvm_used"
+    private const val KEY_PENDING_LAUNCH = "stream_server_pending_launch"
+    private const val KEY_STREAM_AUDIO = "stream_server_audio"
 
     private val mmkv get() = launcherMMKV()
 
@@ -128,6 +131,37 @@ object ServerSettings {
         set(value) {
             mmkv.encode(KEY_SERVER_ENABLED, value)
         }
+
+    /**
+     * 本进程里是否已经启动过一次内嵌 JVM。
+     * JVM 在同一进程内只能启动一次（JLI_Launch 不可重入），
+     * 所以游戏退出后想再启动，必须重启进程。
+     */
+    var jvmUsed: Boolean
+        get() = mmkv.decodeBool(KEY_JVM_USED, false)
+        set(value) {
+            mmkv.encode(KEY_JVM_USED, value)
+        }
+
+    /**
+     * 进程重启后需要自动拉起的版本名（空串表示不需要）
+     */
+    var pendingLaunch: String
+        get() = mmkv.decodeString(KEY_PENDING_LAUNCH, "") ?: ""
+        set(value) {
+            mmkv.encode(KEY_PENDING_LAUNCH, value)
+        }
+
+    /** 是否把游戏声音一起串流（需要一次性的屏幕/音频录制授权） */
+    var streamAudio: Boolean
+        get() = mmkv.decodeBool(KEY_STREAM_AUDIO, true)
+        set(value) {
+            mmkv.encode(KEY_STREAM_AUDIO, value)
+        }
+
+    /** 音频采集是否真的起来了（只读，运行期状态） */
+    @Volatile
+    var audioActive: Boolean = false
 
     private fun makeEven(value: Int): Int = if (value % 2 == 0) value else value - 1
 

@@ -102,12 +102,9 @@ class StreamActivity : ComponentActivity(), StreamConnection.Listener {
 
     private var surfaceView: SurfaceView? = null
     private var decoder: VideoDecoder? = null
+    private var audioPlayer: AudioPlayer? = null
     private var controller: InputController? = null
 
-    /** 当前视频尺寸，用于把触摸坐标换算成比例 */
-    private var videoWidth = 1280
-    private var videoHeight = 720
-    private val viewSize = IntArray(2)
 
     private var stateText by mutableStateOf("连接中…")
     private var statsText by mutableStateOf("")
@@ -219,11 +216,12 @@ class StreamActivity : ComponentActivity(), StreamConnection.Listener {
         decoder = dec
 
         val conn = StreamConnection(host, port, password, this)
+        //解码异常时主动要一个关键帧，避免花屏/黑屏卡死
+        dec.onDecodeError = { conn.requestKeyFrame() }
         connection = conn
         controller = InputController(conn).also {
             it.mode = mode
-            it.videoWidth = videoWidth
-            it.videoHeight = videoHeight
+            it.sensitivity = ClientPrefs.sensitivity(this)
         }
 
         stateText = getString(R.string.client_connecting)
@@ -234,9 +232,8 @@ class StreamActivity : ComponentActivity(), StreamConnection.Listener {
             result.onSuccess { hello ->
                 connected = true
                 stateText = getString(R.string.client_connected)
-                videoWidth = hello.width
-                videoHeight = hello.height
                 decoder?.start(hello.width, hello.height)
+                audioPlayer = AudioPlayer().takeIf { it.start() }
                 //请求当前状态
                 conn.sendCommand(StreamProtocol.Command(cmd = StreamProtocol.CMD_STATUS))
             }.onFailure { e ->
@@ -249,6 +246,8 @@ class StreamActivity : ComponentActivity(), StreamConnection.Listener {
     private fun stopStreaming() {
         decoder?.stop()
         decoder = null
+        audioPlayer?.stop()
+        audioPlayer = null
         connection?.close("Activity closed")
         connection = null
         controller = null
@@ -269,12 +268,14 @@ class StreamActivity : ComponentActivity(), StreamConnection.Listener {
         decoder?.submit(data)
     }
 
+    override fun onAudio(data: ByteArray) {
+        audioPlayer?.submit(data)
+    }
+
     override fun onMeta(meta: StreamProtocol.Meta) {
         runOnUiThread {
             gameState = meta.state
             messageText = meta.message
-            videoWidth = meta.width.takeIf { it > 0 } ?: videoWidth
-            videoHeight = meta.height.takeIf { it > 0 } ?: videoHeight
             val flick = when (meta.state) {
                 StreamProtocol.STATE_LAUNCHING -> getString(R.string.client_state_launching)
                 StreamProtocol.STATE_RUNNING -> getString(R.string.client_state_running)
@@ -300,8 +301,7 @@ class StreamActivity : ComponentActivity(), StreamConnection.Listener {
 
     private fun handleTouch(event: MotionEvent, view: View) {
         val ctrl = controller ?: return
-        view.getLocationOnScreen(viewSize)
-        //坐标转换为 SurfaceView 局部坐标
+        //坐标基于 SurfaceView 局部坐标系
         val w = view.width.coerceAtLeast(1)
         val h = view.height.coerceAtLeast(1)
 
@@ -334,9 +334,7 @@ class StreamActivity : ComponentActivity(), StreamConnection.Listener {
                     }
                 }
             }
-            MotionEvent.ACTION_CANCEL -> {
-                ctrl.releaseAllKeys()
-            }
+            MotionEvent.ACTION_CANCEL -> ctrl.onCancel()
         }
     }
 

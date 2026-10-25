@@ -78,6 +78,9 @@ object StreamProtocol {
 
     /** 远程指令（客户端 -> 服务端），负载为 UTF-8 JSON */
     const val TYPE_COMMAND = 10
+
+    /** 音频数据（服务端 -> 客户端），负载为 AAC / Opus 帧 */
+    const val TYPE_AUDIO = 11
     // endregion
 
     // region 运行状态
@@ -219,7 +222,9 @@ object StreamProtocol {
         val bitrateKbps: Int = 0,
         val grabbed: Boolean = false,
         val currentVersion: String = "",
-        val versions: List<String> = emptyList()
+        val versions: List<String> = emptyList(),
+        /** 是否在推送音频 */
+        val audio: Boolean = false
     )
 
     /**

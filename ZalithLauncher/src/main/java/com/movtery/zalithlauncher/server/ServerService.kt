@@ -114,12 +114,20 @@ class ServerService : Service() {
         }
         startForegroundCompat(buildNotification())
         acquireLocks()
-        //自动拉起上次运行的游戏
-        if (intent?.action == ACTION_START && ServerSettings.autoLaunchGame) {
-            val last = ServerSettings.lastVersion
-            if (last.isNotEmpty() && !GameSession.isRunning()) {
-                Logger.info(TAG, "Auto launching $last")
-                GameSession.launch(this, last)
+
+        //进程重启后的续跑：之前记下的 pendingLaunch 优先于 autoLaunchGame
+        val pending = GameRuntime.consumePendingLaunch()
+        when {
+            pending.isNotEmpty() && !GameSession.isRunning() -> {
+                Logger.info(TAG, "Resuming pending launch: $pending")
+                GameSession.launch(this, pending)
+            }
+            intent?.action == ACTION_START && ServerSettings.autoLaunchGame -> {
+                val last = ServerSettings.lastVersion
+                if (last.isNotEmpty() && !GameSession.isRunning()) {
+                    Logger.info(TAG, "Auto launching $last")
+                    GameSession.launch(this, last)
+                }
             }
         }
         return START_STICKY

@@ -76,6 +76,12 @@ jobs:
           # 前台服务必须存在
           echo "$TREEXML" | grep -q 'ServerService' \
             || { echo "::error::missing foreground service"; exit 1; }
+          # 音频串流所需的录制权限
+          echo "$TREEXML" | grep -q 'RECORD_AUDIO' \
+            || { echo "::error::missing RECORD_AUDIO permission"; exit 1; }
+          # 串流端口所用网络权限
+          echo "$BADGING" | grep -q 'android.permission.INTERNET' \
+            || { echo "::error::missing INTERNET permission"; exit 1; }
 
       - name: Upload server APK
         uses: actions/upload-artifact@v4

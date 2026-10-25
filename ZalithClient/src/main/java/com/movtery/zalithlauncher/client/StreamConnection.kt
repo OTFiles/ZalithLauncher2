@@ -61,6 +61,7 @@ class StreamConnection(
     interface Listener {
         fun onConnected(hello: StreamProtocol.ServerHello)
         fun onVideo(data: ByteArray)
+        fun onAudio(data: ByteArray)
         fun onMeta(meta: StreamProtocol.Meta)
         fun onDisconnected(reason: String)
     }
@@ -127,6 +128,7 @@ class StreamConnection(
                         lastVideoAt.set(System.currentTimeMillis())
                         listener.onVideo(frame.payload)
                     }
+                    StreamProtocol.TYPE_AUDIO -> listener.onAudio(frame.payload)
                     StreamProtocol.TYPE_META -> {
                         runCatching {
                             gson.fromJson(frame.asString(), StreamProtocol.Meta::class.java)

@@ -63,6 +63,8 @@ object RemoteInput : InputCodec.Decoder.Handler {
     }
 
     override fun onPointer(pointer: InputCodec.Pointer) {
+        //绝对坐标是"相对画面的比例"，相对位移也是比例（位移 / 画面宽度），
+        //两者都以串流分辨率为基准换算成游戏内像素。
         val x = pointer.xRatio.coerceIn(-4f, 4f) * streamWidth
         val y = pointer.yRatio.coerceIn(-4f, 4f) * streamHeight
 
@@ -86,7 +88,7 @@ object RemoteInput : InputCodec.Decoder.Handler {
 
             InputCodec.POINTER_MOVE -> {
                 if (pointer.isDelta) {
-                    //相对位移：抓取模式下用于转视角
+                    //相对位移：直接改视角
                     CallbackBridge.sendCursorDelta(x, y)
                     cursorX += x
                     cursorY += y
@@ -138,12 +140,23 @@ object RemoteInput : InputCodec.Decoder.Handler {
         GameSession.updateGrabbed(grabbed)
     }
 
+    /**
+     * 由游戏侧（GLFW 抓取状态回调）反向同步真实状态，
+     * 客户端据此切换"转视角 / 指针"手势，不必自己猜。
+     */
+    fun syncGrabFromGame(isGrabbing: Boolean) {
+        if (grabbed == isGrabbing) return
+        grabbed = isGrabbing
+        GameSession.updateGrabbed(isGrabbing)
+        ServerStreamEngine.instance.broadcastMetaNow()
+    }
+
     override fun onTap(tap: InputCodec.Tap) {
         val x = tap.xRatio.coerceIn(0f, 1f) * streamWidth
         val y = tap.yRatio.coerceIn(0f, 1f) * streamHeight
         if (grabbed) {
-            //抓取模式下绝对坐标无意义，按点击处理左键
-            CallbackBridge.putMouseEvent(Keycodes.MOUSE_BUTTON_LEFT - 1)
+            //抓取模式下绝对坐标无意义，按一次左键点击处理
+            CallbackBridge.putMouseEvent(0)
             return
         }
         CallbackBridge.sendCursorPos(x, y)

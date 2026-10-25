@@ -25,26 +25,27 @@ import com.movtery.streamcore.Keycodes
 /**
  * 触屏手势 -> 串流输入。
  *
- * 两种模式：
- *  - [TouchMode.CAPTURE]（默认）：单指滑动 = 转视角（相对位移），屏幕中央当作准星，
- *    这是玩 MC 最舒服的方式；双指滑动 = 后退/前进（模拟 W/S 不方便，这里做成滚轮）。
- *  - [TouchMode.DIRECT]：手指位置就是鼠标位置，适合点菜单、合成、开箱子。
- *  - [TouchMode.WALK]：屏幕左侧拖动 = WASD 移动，右侧拖动 = 转视角（默认推荐的手机玩法）。
+ * 三种模式（服务端只需理解"绝对坐标比例"和"相对位移比例"两种指针事件）：
+ *  - [TouchMode.WALK]（默认，推荐）：屏幕左半边拖动 = WASD 摇杆，右半边拖动 = 转视角。
+ *  - [TouchMode.CAPTURE]：整屏拖动 = 转视角，适合主要靠虚拟按键玩。
+ *  - [TouchMode.DIRECT]：手指位置就是鼠标位置，适合点菜单 / 合成 / 开箱子。
+ *
+ * 重要约定：所有坐标都发"比例"而不是像素，这样客户端分辨率与服务端
+ * 串流分辨率不一致时也能正确映射。
  */
 class InputController(private val connection: StreamConnection) {
-    enum class TouchMode { CAPTURE, DIRECT, WALK }
+    enum class TouchMode { WALK, CAPTURE, DIRECT }
 
     var mode: TouchMode = TouchMode.WALK
     /** 视角灵敏度，1.0 为默认 */
     var sensitivity: Float = 1.0f
-    /** 客户端画面宽高，用于把像素位移换算成比例 */
-    var videoWidth: Int = 1280
-    var videoHeight: Int = 720
 
-    private var lastX = 0f
-    private var lastY = 0f
-    private var primaryPointerId = -1
-    private var secondaryPointerId = -1
+    private enum class Role { MOVE, LOOK }
+
+    /** 每个指针的角色与上一次位置 */
+    private class PointerState(var role: Role, var lastX: Float, var lastY: Float)
+
+    private val pointers = HashMap<Int, PointerState>()
 
     /** 虚拟按键当前状态，避免重复发按下事件 */
     private val pressedKeys = HashSet<Int>()
@@ -61,185 +62,136 @@ class InputController(private val connection: StreamConnection) {
     // region 触摸
 
     fun onTouchDown(pointerId: Int, x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
-        if (primaryPointerId == -1) {
-            primaryPointerId = pointerId
-            lastX = x
-            lastY = y
-        } else if (secondaryPointerId == -1) {
-            secondaryPointerId = pointerId
+        val w = viewWidth.coerceAtLeast(1)
+        val h = viewHeight.coerceAtLeast(1)
+        val role = when (mode) {
+            TouchMode.WALK -> if (x < w * 0.5f) Role.MOVE else Role.LOOK
+            else -> Role.LOOK
         }
+        pointers[pointerId] = PointerState(role, x, y)
 
-        when (mode) {
-            TouchMode.DIRECT -> {
-                val rx = (x / viewWidth).coerceIn(0f, 1f)
-                val ry = (y / viewHeight).coerceIn(0f, 1f)
+        when {
+            mode == TouchMode.DIRECT -> {
                 connection.sendPointer(
                     InputCodec.Pointer(
                         pointerId = pointerId,
                         action = InputCodec.POINTER_DOWN,
-                        xRatio = rx,
-                        yRatio = ry
+                        xRatio = (x / w).coerceIn(0f, 1f),
+                        yRatio = (y / h).coerceIn(0f, 1f)
                     )
                 )
             }
-            TouchMode.CAPTURE -> Unit
-            TouchMode.WALK -> {
-                //左半屏当作虚拟摇杆，按下瞬间不移动
-            }
+            //WALK 模式下左半边是摇杆，不产生指针事件
+            role == Role.MOVE -> Unit
+            else -> Unit
         }
     }
 
     fun onTouchMove(pointerId: Int, x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
-        when (mode) {
-            TouchMode.DIRECT -> {
-                val rx = (x / viewWidth).coerceIn(0f, 1f)
-                val ry = (y / viewHeight).coerceIn(0f, 1f)
-                connection.sendPointer(
-                    InputCodec.Pointer(
-                        pointerId = pointerId,
-                        action = InputCodec.POINTER_MOVE,
-                        xRatio = rx,
-                        yRatio = ry
-                    )
+        val w = viewWidth.coerceAtLeast(1)
+        val h = viewHeight.coerceAtLeast(1)
+        val state = pointers[pointerId] ?: return
+
+        if (mode == TouchMode.DIRECT) {
+            connection.sendPointer(
+                InputCodec.Pointer(
+                    pointerId = pointerId,
+                    action = InputCodec.POINTER_MOVE,
+                    xRatio = (x / w).coerceIn(0f, 1f),
+                    yRatio = (y / h).coerceIn(0f, 1f)
                 )
-            }
-            TouchMode.CAPTURE -> {
-                if (pointerId != primaryPointerId) return
-                val dx = (x - lastX) * sensitivity
-                val dy = (y - lastY) * sensitivity
-                lastX = x
-                lastY = y
-                if (dx == 0f && dy == 0f) return
-                //服务端按像素位移处理，这里直接给像素增量
-                connection.sendPointer(
-                    InputCodec.Pointer(
-                        pointerId = pointerId,
-                        action = InputCodec.POINTER_MOVE,
-                        xRatio = dx,
-                        yRatio = dy,
-                        isDelta = true
-                    )
-                )
-            }
-            TouchMode.WALK -> {
-                if (pointerId == primaryPointerId) {
-                    //左半屏：虚拟摇杆 -> WASD
-                    val centerX = viewWidth * 0.22f
-                    val centerY = viewHeight * 0.68f
-                    val dx = x - centerX
-                    val dy = y - centerY
-                    val deadZone = viewWidth * 0.05f
-                    setKey(Keycodes.KEY_W, dy < -deadZone)
-                    setKey(Keycodes.KEY_S, dy > deadZone)
-                    setKey(Keycodes.KEY_A, dx < -deadZone)
-                    setKey(Keycodes.KEY_D, dx > deadZone)
-                } else if (pointerId == secondaryPointerId) {
-                    val dx = (x - lastX) * sensitivity
-                    val dy = (y - lastY) * sensitivity
-                    lastX = x
-                    lastY = y
-                    if (dx == 0f && dy == 0f) return
-                    connection.sendPointer(
-                        InputCodec.Pointer(
-                            pointerId = pointerId,
-                            action = InputCodec.POINTER_MOVE,
-                            xRatio = dx,
-                            yRatio = dy,
-                            isDelta = true
-                        )
-                    )
-                }
-            }
+            )
+            state.lastX = x
+            state.lastY = y
+            return
         }
+
+        if (state.role == Role.MOVE) {
+            //左半屏虚拟摇杆 -> WASD
+            val centerX = w * 0.22f
+            val centerY = h * 0.70f
+            val deadZone = w * 0.06f
+            val dx = x - centerX
+            val dy = y - centerY
+            setKey(Keycodes.KEY_W, dy < -deadZone)
+            setKey(Keycodes.KEY_S, dy > deadZone)
+            setKey(Keycodes.KEY_A, dx < -deadZone)
+            setKey(Keycodes.KEY_D, dx > deadZone)
+            state.lastX = x
+            state.lastY = y
+            return
+        }
+
+        //转视角：发相对位移比例，服务端再换算成游戏像素
+        val dx = x - state.lastX
+        val dy = y - state.lastY
+        state.lastX = x
+        state.lastY = y
+        if (dx == 0f && dy == 0f) return
+        connection.sendPointer(
+            InputCodec.Pointer(
+                pointerId = pointerId,
+                action = InputCodec.POINTER_MOVE,
+                xRatio = dx * sensitivity / w,
+                yRatio = dy * sensitivity / h,
+                isDelta = true
+            )
+        )
     }
 
     fun onTouchUp(pointerId: Int, x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
-        when (mode) {
-            TouchMode.DIRECT -> {
-                val rx = (x / viewWidth).coerceIn(0f, 1f)
-                val ry = (y / viewHeight).coerceIn(0f, 1f)
-                connection.sendPointer(
-                    InputCodec.Pointer(
-                        pointerId = pointerId,
-                        action = InputCodec.POINTER_UP,
-                        xRatio = rx,
-                        yRatio = ry
-                    )
+        val w = viewWidth.coerceAtLeast(1)
+        val h = viewHeight.coerceAtLeast(1)
+        val state = pointers.remove(pointerId)
+
+        if (mode == TouchMode.DIRECT) {
+            connection.sendPointer(
+                InputCodec.Pointer(
+                    pointerId = pointerId,
+                    action = InputCodec.POINTER_UP,
+                    xRatio = (x / w).coerceIn(0f, 1f),
+                    yRatio = (y / h).coerceIn(0f, 1f)
                 )
-            }
-            TouchMode.CAPTURE -> {
-                if (pointerId == primaryPointerId) {
-                    connection.sendPointer(
-                        InputCodec.Pointer(
-                            pointerId = pointerId,
-                            action = InputCodec.POINTER_UP,
-                            xRatio = 0f,
-                            yRatio = 0f
-                        )
-                    )
-                }
-            }
-            TouchMode.WALK -> {
-                if (pointerId == primaryPointerId) {
-                    setKey(Keycodes.KEY_W, false)
-                    setKey(Keycodes.KEY_S, false)
-                    setKey(Keycodes.KEY_A, false)
-                    setKey(Keycodes.KEY_D, false)
-                }
-            }
+            )
+        } else if (state?.role == Role.MOVE) {
+            setKey(Keycodes.KEY_W, false)
+            setKey(Keycodes.KEY_S, false)
+            setKey(Keycodes.KEY_A, false)
+            setKey(Keycodes.KEY_D, false)
         }
-        if (pointerId == primaryPointerId) primaryPointerId = -1
-        if (pointerId == secondaryPointerId) secondaryPointerId = -1
     }
 
+    fun onCancel() {
+        releaseAllKeys()
+        pointers.clear()
+        connection.sendPointer(
+            InputCodec.Pointer(
+                pointerId = -1,
+                action = InputCodec.POINTER_CANCEL,
+                xRatio = 0f,
+                yRatio = 0f
+            )
+        )
+    }
+
+    /**
+     * 点击：直接模式下按该点位置点击，其它模式在准星位置点击
+     */
     fun onTap(x: Float, y: Float, viewWidth: Int, viewHeight: Int, rightClick: Boolean) {
-        val rx = (x / viewWidth).coerceIn(0f, 1f)
-        val ry = (y / viewHeight).coerceIn(0f, 1f)
-        if (mode == TouchMode.DIRECT && !grabbed) {
-            connection.sendTap(
-                InputCodec.Tap(
-                    xRatio = rx,
-                    yRatio = ry,
-                    button = if (rightClick) Keycodes.MOUSE_BUTTON_RIGHT else Keycodes.MOUSE_BUTTON_LEFT
-                )
+        val w = viewWidth.coerceAtLeast(1)
+        val h = viewHeight.coerceAtLeast(1)
+        val direct = mode == TouchMode.DIRECT
+        connection.sendTap(
+            InputCodec.Tap(
+                xRatio = if (direct) (x / w).coerceIn(0f, 1f) else 0.5f,
+                yRatio = if (direct) (y / h).coerceIn(0f, 1f) else 0.5f,
+                button = if (rightClick) Keycodes.MOUSE_BUTTON_RIGHT else Keycodes.MOUSE_BUTTON_LEFT
             )
-        } else {
-            //非直接模式下，点击交给服务端当作左/右键点击
-            connection.sendTap(
-                InputCodec.Tap(
-                    xRatio = 0.5f,
-                    yRatio = 0.5f,
-                    button = if (rightClick) Keycodes.MOUSE_BUTTON_RIGHT else Keycodes.MOUSE_BUTTON_LEFT
-                )
-            )
-        }
+        )
     }
 
     fun onScroll(dy: Float) {
         connection.sendScroll(InputCodec.Scroll(0f, dy))
-    }
-
-    fun onLongPress() {
-        //长按 = 按住左键（挖掘）
-        connection.sendPointer(
-            InputCodec.Pointer(
-                pointerId = 99,
-                action = InputCodec.POINTER_DOWN,
-                xRatio = 0f,
-                yRatio = 0f
-            )
-        )
-    }
-
-    fun onLongPressEnd() {
-        connection.sendPointer(
-            InputCodec.Pointer(
-                pointerId = 99,
-                action = InputCodec.POINTER_UP,
-                xRatio = 0f,
-                yRatio = 0f
-            )
-        )
     }
     // endregion
 
@@ -341,12 +293,9 @@ class InputController(private val connection: StreamConnection) {
             KeyEvent.KEYCODE_F3 -> Keycodes.KEY_F3
             KeyEvent.KEYCODE_F4 -> Keycodes.KEY_F4
             KeyEvent.KEYCODE_F5 -> Keycodes.KEY_F5
-            KeyEvent.KEYCODE_SHIFT_LEFT -> Keycodes.KEY_LEFT_SHIFT
-            KeyEvent.KEYCODE_SHIFT_RIGHT -> Keycodes.KEY_LEFT_SHIFT
-            KeyEvent.KEYCODE_CTRL_LEFT -> Keycodes.KEY_LEFT_CONTROL
-            KeyEvent.KEYCODE_CTRL_RIGHT -> Keycodes.KEY_LEFT_CONTROL
-            KeyEvent.KEYCODE_ALT_LEFT -> Keycodes.KEY_LEFT_ALT
-            KeyEvent.KEYCODE_ALT_RIGHT -> Keycodes.KEY_LEFT_ALT
+            KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> Keycodes.KEY_LEFT_SHIFT
+            KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT -> Keycodes.KEY_LEFT_CONTROL
+            KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT -> Keycodes.KEY_LEFT_ALT
             else -> null
         }
     }

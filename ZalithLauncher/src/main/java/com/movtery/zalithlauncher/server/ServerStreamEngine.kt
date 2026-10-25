@@ -58,6 +58,11 @@ class ServerStreamEngine private constructor() {
     private var acceptThread: Thread? = null
 
     private var encoder: VideoEncoder? = null
+    private var audioCapture: GameAudioCapture? = null
+
+    /** 由设置界面申请到的录制授权，音频串流的关键 */
+    @Volatile
+    var mediaProjection: android.media.projection.MediaProjection? = null
     private val clients = CopyOnWriteArrayList<ClientConnection>()
 
     /** 串流尺寸与编码参数 */
@@ -126,6 +131,7 @@ class ServerStreamEngine private constructor() {
             }
         }
         RemoteInput.updateStreamSize(streamWidth, streamHeight)
+        startAudioIfPossible()
 
         //2. 再监听端口
         val socket = try {
@@ -166,6 +172,8 @@ class ServerStreamEngine private constructor() {
         clients.clear()
         progressThread?.interrupt()
         progressThread = null
+        runCatching { audioCapture?.stop() }
+        audioCapture = null
         encoder?.stop()
         encoder = null
         GameSession.surfaceProvider = null
@@ -173,6 +181,35 @@ class ServerStreamEngine private constructor() {
     }
 
     // region 编码器
+
+    /**
+     * 有授权就启动音频采集；没有就静默跳过（画面照常串流）
+     */
+    private fun startAudioIfPossible() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        if (!ServerSettings.streamAudio) return
+        val projection = mediaProjection
+        if (projection == null) {
+            Log.i(TAG, "No media projection token, audio streaming disabled")
+            return
+        }
+        runCatching {
+            val capture = GameAudioCapture(projection) { frame ->
+                broadcastAudio(frame)
+            }
+            if (capture.start()) {
+                audioCapture = capture
+                ServerSettings.audioActive = true
+            }
+        }.onFailure {
+            Log.w(TAG, "Audio capture unavailable", it)
+        }
+    }
+
+    private fun broadcastAudio(frame: ByteArray) {
+        if (clients.isEmpty()) return
+        clients.forEach { it.sendAudio(frame) }
+    }
 
     fun requestKeyFrame() {
         encoder?.forceKeyFrame()
@@ -191,6 +228,13 @@ class ServerStreamEngine private constructor() {
         clients.forEach { it.queueParameterSets(sets) }
     }
 
+    /**
+     * 立即向所有客户端推送一次状态（抓取模式变化等场景）
+     */
+    fun broadcastMetaNow() {
+        runCatching { broadcastMeta() }
+    }
+
     private fun broadcastMeta() {
         val state = GameSession.state.value
         val meta = StreamProtocol.Meta(
@@ -201,7 +245,8 @@ class ServerStreamEngine private constructor() {
             fps = state.fps,
             bitrateKbps = state.bitrateKbps,
             grabbed = RemoteInput.grabbed,
-            currentVersion = state.currentVersion
+            currentVersion = state.currentVersion,
+            audio = audioCapture != null
         )
         val payload = gson.toJson(meta)
         clients.forEach { it.sendFrame(StreamProtocol.TYPE_META, payload) }
@@ -317,7 +362,8 @@ class ServerStreamEngine private constructor() {
             fps = state.fps,
             bitrateKbps = state.bitrateKbps,
             grabbed = RemoteInput.grabbed,
-            currentVersion = state.currentVersion
+            currentVersion = state.currentVersion,
+            audio = audioCapture != null
         )
     }
     // endregion
@@ -362,6 +408,15 @@ class ServerStreamEngine private constructor() {
             if (closed.get()) return
             runCatching {
                 StreamProtocol.writeFrame(output, type, payload)
+            }.onFailure {
+                close("write failed")
+            }
+        }
+
+        fun sendAudio(frame: ByteArray) {
+            if (closed.get()) return
+            runCatching {
+                StreamProtocol.writeFrame(output, StreamProtocol.TYPE_AUDIO, frame)
             }.onFailure {
                 close("write failed")
             }
@@ -434,7 +489,9 @@ class ServerStreamEngine private constructor() {
                         command.version.ifEmpty { null }
                     )
                 }
-                StreamProtocol.CMD_STOP -> GameSession.stop()
+                StreamProtocol.CMD_STOP -> GameSession.stop(
+                    ServerService.instance ?: com.movtery.zalithlauncher.context.GlobalContext
+                )
             }
         }
 

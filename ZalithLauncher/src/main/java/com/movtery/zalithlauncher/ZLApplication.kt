@@ -79,8 +79,14 @@ class ZLApplication : Application(), SingletonImageLoader.Factory {
                 Logger.error("AppCrash", "An exception occurred while saving the crash report", t)
             }
 
-            showLauncherCrash(this@ZLApplication, throwable, th !is SplashException)
-            Process.killProcess(Process.myPid())
+            if (com.movtery.zalithlauncher.server.ServerSettings.serverEnabled) {
+                //服务端没有可见界面：不要把用户看不见的 Activity 拉起来，
+                //直接把崩溃信息写进日志，然后重启进程以便继续提供服务。
+                com.movtery.zalithlauncher.server.GameRuntime.restartProcess(this@ZLApplication)
+            } else {
+                showLauncherCrash(this@ZLApplication, throwable, th !is SplashException)
+                Process.killProcess(Process.myPid())
+            }
         }
 
         super.onCreate()

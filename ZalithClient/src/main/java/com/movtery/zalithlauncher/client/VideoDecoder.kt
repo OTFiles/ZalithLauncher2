@@ -43,6 +43,13 @@ class VideoDecoder(private val surface: Surface) {
     var decodedFrames: Int = 0
         private set
 
+    /** 是否已经拿到可解码的首帧（关键帧） */
+    @Volatile
+    private var sawKeyFrame = false
+
+    /** 解码错误回调，用于让上层请求关键帧 */
+    var onDecodeError: (() -> Unit)? = null
+
     fun start(width: Int, height: Int) {
         this.width = width
         this.height = height
@@ -81,6 +88,7 @@ class VideoDecoder(private val surface: Surface) {
 
     private fun decodeLoop() {
         val info = MediaCodec.BufferInfo()
+        var errors = 0
         while (running) {
             val data = try {
                 queue.poll(50, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -90,6 +98,10 @@ class VideoDecoder(private val surface: Surface) {
             val codec = ensureCodec() ?: continue
 
             if (data != null) {
+                val isKey = AnnexB.containsKeyFrame(data)
+                if (isKey) sawKeyFrame = true
+                //没拿到关键帧之前的 P 帧解码器也解不出来，直接丢，省电
+                if (!sawKeyFrame) continue
                 runCatching {
                     val index = codec.dequeueInputBuffer(5_000)
                     if (index >= 0) {
@@ -97,6 +109,12 @@ class VideoDecoder(private val surface: Surface) {
                         buffer.clear()
                         buffer.put(data)
                         codec.queueInputBuffer(index, 0, data.size, System.nanoTime() / 1000, 0)
+                        errors = 0
+                    }
+                }.onFailure {
+                    if (++errors > 20) {
+                        onDecodeError?.invoke()
+                        errors = 0
                     }
                 }
             }

@@ -25,7 +25,9 @@ import android.util.Log
 import android.view.Surface
 import androidx.compose.ui.unit.IntSize
 import com.movtery.streamcore.StreamProtocol
+import com.movtery.zalithlauncher.bridge.CURSOR_DISABLED
 import com.movtery.zalithlauncher.bridge.ZLBridge
+import com.movtery.zalithlauncher.bridge.ZLBridgeStates
 import com.movtery.zalithlauncher.game.account.Account
 import com.movtery.zalithlauncher.game.account.AccountsManager
 import com.movtery.zalithlauncher.game.control.ControlManager
@@ -81,6 +83,9 @@ object GameSession {
     private val launching = AtomicBoolean(false)
     private val stopping = AtomicBoolean(false)
 
+    /** 监听游戏侧鼠标抓取状态的任务 */
+    private var grabMirrorJob: kotlinx.coroutines.Job? = null
+
     /**
      * 渲染目标，由串流编码器注入
      */
@@ -123,6 +128,15 @@ object GameSession {
         if (launching.get() || _state.value.state == StreamProtocol.STATE_RUNNING) {
             Log.w(TAG, "Launch ignored: a game is already running or launching.")
             return false
+        }
+        //内嵌 JVM 在同一进程里只能创建一次：如果这一轮已经跑过游戏，
+        //先把要启动的版本记下来，重启进程后自动接着启动。
+        if (ServerSettings.jvmUsed) {
+            Logger.info(TAG, "JVM already used in this process, restarting to launch again")
+            ServerSettings.pendingLaunch = versionName ?: ServerSettings.lastVersion
+            ServerSettings.serverEnabled = true
+            GameRuntime.restartProcess(context)
+            return true
         }
         if (!launching.compareAndSet(false, true)) return false
         stopping.set(false)
@@ -182,6 +196,8 @@ object GameSession {
         }
 
         ServerSettings.lastVersion = version.getVersionName()
+        //标记本进程的 JVM 即将被占用
+        ServerSettings.jvmUsed = true
         updateState(
             StreamProtocol.STATE_LAUNCHING,
             "Launching ${version.getVersionName()}",
@@ -225,6 +241,11 @@ object GameSession {
                         if (code == 0) "" else "Game exited with code $code"
                     )
                 }
+                //游戏侧的 System.exit 会被 exit hook 接管并结束整个进程，
+                //这里让进程体面地重启，服务端才能继续等待下一次启动指令。
+                if (ServerSettings.keepAlive && ServerSettings.serverEnabled) {
+                    GameRuntime.restartProcess(context)
+                }
             },
             openPath = { /* 服务端没有文件浏览界面 */ }
         )
@@ -238,6 +259,12 @@ object GameSession {
                 CallbackBridge.sendUpdateWindowSize(width, height)
                 CallbackBridge.nativeSetWindowAttrib(GLFW_FOCUSED, 1)
                 CallbackBridge.nativeSetWindowAttrib(GLFW_HOVERED, 1)
+                //抓取状态由游戏侧驱动，直接镜像给所有客户端
+                grabMirrorJob = scope.launch(Dispatchers.Default) {
+                    ZLBridgeStates.cursorMode.collect { cursorMode ->
+                        RemoteInput.syncGrabFromGame(cursorMode == CURSOR_DISABLED)
+                    }
+                }
                 CallbackBridge.setGraphicOutputListener {
                     //首帧渲染出来就认为游戏已经就绪
                     if (_state.value.state != StreamProtocol.STATE_RUNNING) {
@@ -295,7 +322,7 @@ object GameSession {
      * 内嵌 JVM 的游戏退出会触发 native exit hook，最终回调 [GameLauncher] 的 onExit；
      * 这里只负责发出退出请求并回收状态。
      */
-    fun stop() {
+    fun stop(context: Context) {
         val launcher = gameLauncher
         if (launcher == null) {
             updateState(StreamProtocol.STATE_IDLE, "")
@@ -303,6 +330,8 @@ object GameSession {
             return
         }
         stopping.set(true)
+        //停止后不需要自动续跑
+        ServerSettings.pendingLaunch = ""
         updateState(StreamProtocol.STATE_IDLE, "Stopping")
         scope.launch {
             runCatching { launcher.exit() }.onFailure {
@@ -313,11 +342,9 @@ object GameSession {
             gameThread = null
             launching.set(false)
             updateState(StreamProtocol.STATE_IDLE, "")
-            //MC 的 JVM 内嵌在本进程里，游戏侧的 System.exit 会被 exit hook 接管并结束整个进程。
-            //服务端没有重启入口，这里主动结束进程，交给 START_STICKY 的前台服务让系统重新拉起，
-            //语义上等价于"关掉游戏后重启服务端"。
-            Logger.info(TAG, "Restarting the server process after the game was stopped")
-            android.os.Process.killProcess(android.os.Process.myPid())
+            //游戏 JVM 与宿主进程共存亡，停游戏等于结束进程；
+            //重启进程让服务端回到"等待下一次指令"的干净状态。
+            GameRuntime.restartProcess(context)
         }
     }
 
@@ -357,8 +384,15 @@ object GameSession {
 
     fun isRunning(): Boolean = gameLauncher != null
 
+    /**
+     * 服务被销毁时的收尾。
+     *
+     * 注意：游戏 JVM 与宿主进程共存亡，服务被销毁不代表要停止游戏，
+     * 因此这里只取消监听，不触发退出。
+     */
     fun shutdown() {
-        runCatching { stop() }
+        grabMirrorJob?.cancel()
+        grabMirrorJob = null
     }
 
     /**

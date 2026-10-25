@@ -95,6 +95,43 @@ const val ACTION_SETTINGS = "com.movtery.zalithlauncher.server.action.SETTINGS"
  * ```
  */
 class ServerSettingsActivity : ComponentActivity() {
+    private val requestAudioCapture = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        val manager = getSystemService(android.media.projection.MediaProjectionManager::class.java)
+        if (result.resultCode == RESULT_OK && data != null && manager != null) {
+            runCatching {
+                val projection = manager.getMediaProjection(result.resultCode, data)
+                ServerStreamEngine.instance.mediaProjection = projection
+                projection.registerCallback(
+                    object : android.media.projection.MediaProjection.Callback() {
+                        override fun onStop() {
+                            ServerStreamEngine.instance.mediaProjection = null
+                        }
+                    },
+                    android.os.Handler(android.os.Looper.getMainLooper())
+                )
+                //授权后重启串流，让音频采集生效
+                ServerService.refresh(this)
+            }.onFailure {
+                Logger.error(TAG, "Failed to obtain media projection", it)
+            }
+        }
+    }
+
+    /** 申请屏幕/音频录制授权（音频串流需要） */
+    fun requestMediaProjection() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        val manager = getSystemService(android.media.projection.MediaProjectionManager::class.java)
+            ?: return
+        runCatching {
+            requestAudioCapture.launch(manager.createScreenCaptureIntent())
+        }.onFailure {
+            Logger.error(TAG, "Cannot launch the capture intent", it)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         GlobalContext = applicationContext
@@ -129,6 +166,7 @@ private fun ServerSettingsScreen(activity: ServerSettingsActivity) {
     var keepAlive by remember { mutableStateOf(ServerSettings.keepAlive) }
     var showIcon by remember { mutableStateOf(ServerSettings.showLauncherIcon) }
     var autoLaunch by remember { mutableStateOf(ServerSettings.autoLaunchGame) }
+    var streamAudio by remember { mutableStateOf(ServerSettings.streamAudio) }
 
     var statusText by remember { mutableStateOf("") }
     var addresses by remember { mutableStateOf(listOf<String>()) }
@@ -296,7 +334,7 @@ private fun ServerSettingsScreen(activity: ServerSettingsActivity) {
                         ) { Text("Launch game") }
                         OutlinedButton(
                             onClick = {
-                                GameSession.stop()
+                                GameSession.stop(activity)
                                 refreshStatus()
                             },
                             enabled = gameRunning
@@ -327,6 +365,12 @@ private fun ServerSettingsScreen(activity: ServerSettingsActivity) {
                         autoLaunch = it
                         ServerSettings.autoLaunchGame = it
                     }
+                    SwitchRow("Stream game audio (needs capture permission)", streamAudio) {
+                        streamAudio = it
+                        ServerSettings.streamAudio = it
+                        if (it) activity.requestMediaProjection()
+                        ServerService.refresh(activity)
+                    }
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     SwitchRow("Show launcher icon", showIcon) {
                         showIcon = it
@@ -346,6 +390,9 @@ private fun ServerSettingsScreen(activity: ServerSettingsActivity) {
                     Text("Permissions", style = MaterialTheme.typography.titleMedium)
                     Button(onClick = { activity.openAppSettings() }) {
                         Text("App settings")
+                    }
+                    OutlinedButton(onClick = { activity.requestMediaProjection() }) {
+                        Text("Capture permission (audio)")
                     }
                     OutlinedButton(onClick = {
                         runCatching {
