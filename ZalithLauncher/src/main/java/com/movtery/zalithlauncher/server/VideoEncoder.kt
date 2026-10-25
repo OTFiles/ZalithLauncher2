@@ -69,6 +69,14 @@ class VideoEncoder(
     @Volatile
     private var requestKeyFrame = false
 
+    /**
+     * 没有客户端时暂停"送帧"。
+     * 注意：编码器本身仍需运行，因为游戏的渲染目标就是它的输入 Surface，
+     * 停掉编码器会让游戏画面无处可去。这里只是不再回调数据，省掉网络分发。
+     */
+    @Volatile
+    var streamingEnabled: Boolean = false
+
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
 
@@ -176,13 +184,16 @@ class VideoEncoder(
                                     if (isKeyFrame && (sps == null || pps == null)) {
                                         cacheParameterSets(data)
                                     }
-                                    //关键帧前拼上 SPS/PPS，客户端从任意位置接入都能解码
-                                    val payload = if (isKeyFrame) {
-                                        parameterSets()?.let { sets -> sets + data } ?: data
-                                    } else {
-                                        data
+                                    //没有客户端时不必编码分发，省电
+                                    if (streamingEnabled) {
+                                        //关键帧前拼上 SPS/PPS，客户端从任意位置接入都能解码
+                                        val payload = if (isKeyFrame) {
+                                            parameterSets()?.let { sets -> sets + data } ?: data
+                                        } else {
+                                            data
+                                        }
+                                        onAccessUnit(payload)
                                     }
-                                    onAccessUnit(payload)
                                 }
                             }
                             codec.releaseOutputBuffer(index, false)

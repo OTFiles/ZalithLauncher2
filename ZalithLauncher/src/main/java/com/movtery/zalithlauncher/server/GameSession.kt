@@ -19,8 +19,6 @@
 package com.movtery.zalithlauncher.server
 
 import android.content.Context
-import android.graphics.Point
-import android.os.Build
 import android.util.Log
 import android.view.Surface
 import androidx.compose.ui.unit.IntSize
@@ -43,7 +41,6 @@ import com.movtery.zalithlauncher.game.version.installed.VersionInfoParser
 import com.movtery.zalithlauncher.game.version.installed.VersionsManager
 import com.movtery.zalithlauncher.game.version.mod.AllModReader
 import com.movtery.zalithlauncher.game.version.mod.isEnabled
-import com.movtery.zalithlauncher.setting.AllSettings
 import com.movtery.zalithlauncher.utils.GSON
 import com.movtery.zalithlauncher.utils.logging.Logger
 import kotlinx.coroutines.CoroutineScope
@@ -395,19 +392,8 @@ object GameSession {
         grabMirrorJob = null
     }
 
-    /**
-     * 关机/退出时需要的屏幕尺寸，仅用于日志与界面展示
-     */
-    fun screenSize(): Point {
-        val w = AllSettings.customResolutionWidth.getValue()
-        val h = AllSettings.customResolutionHeight.getValue()
-        return if (w > 0 && h > 0) Point(w, h) else Point(ServerSettings.width, ServerSettings.height)
-    }
-
     /** GLFW 窗口属性常量（与 LwjglGlfwKeycode 一致，避免模块依赖） */
     private const val GLFW_FOCUSED = 0x20001
     private const val GLFW_HOVERED = 0x2000B
 
-    @Suppress("unused")
-    private val minSdkGuard = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) 1 else 0
 }

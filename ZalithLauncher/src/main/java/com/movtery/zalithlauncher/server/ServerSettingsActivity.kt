@@ -64,7 +64,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import com.movtery.streamcore.StreamProtocol
 import com.movtery.zalithlauncher.context.GlobalContext
 import com.movtery.zalithlauncher.setting.loadAllSettings
 import com.movtery.zalithlauncher.utils.logging.Logger

@@ -20,7 +20,6 @@ package com.movtery.zalithlauncher.client
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
@@ -151,13 +150,5 @@ class AudioPlayer {
         runCatching { track?.stop() }
         runCatching { track?.release() }
         track = null
-    }
-
-    companion object {
-        /** 供调试：是否可用 */
-        fun isSupported(): Boolean = true
-
-        @Suppress("unused")
-        private val audioManagerHint = AudioManager::class.java
     }
 }

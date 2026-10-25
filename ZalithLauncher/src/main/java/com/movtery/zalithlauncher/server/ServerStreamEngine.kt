@@ -330,6 +330,7 @@ class ServerStreamEngine private constructor() {
         socket.soTimeout = 0
         val connection = ClientConnection(socket, input, output)
         clients.add(connection)
+        encoder?.streamingEnabled = true
         notifyStatus()
 
         //新客户端接入：补发参数集 + 请求关键帧，并从下一帧开始能解码
@@ -347,6 +348,8 @@ class ServerStreamEngine private constructor() {
             clients.remove(connection)
             connection.close("")
             RemoteInput.releaseAllButtons()
+            //最后一个客户端走了就停止送帧
+            if (clients.isEmpty()) encoder?.streamingEnabled = false
             notifyStatus()
             Log.i(TAG, "Client removed, total=${clients.size}")
         }

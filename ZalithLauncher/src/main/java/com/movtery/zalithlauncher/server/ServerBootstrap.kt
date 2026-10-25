@@ -19,7 +19,6 @@
 package com.movtery.zalithlauncher.server
 
 import android.content.Context
-import android.provider.Settings
 import com.movtery.zalithlauncher.components.Components
 import com.movtery.zalithlauncher.components.UnpackComponentsTask
 import com.movtery.zalithlauncher.components.jre.Jre
@@ -68,7 +67,7 @@ object ServerBootstrap {
         initApp(context)
 
         //存储权限：安卓 11 以上需要"所有文件访问权限"，服务端通过设置页申请
-        requestLegacyStorageIfNeeded(context)
+        logStorageAccess()
 
         val tasks = mutableListOf<suspend () -> Unit>()
 
@@ -120,23 +119,22 @@ object ServerBootstrap {
     }
 
     /**
-     * 安卓 10 及以下申请传统存储权限；11 及以上需要用户手动授予所有文件访问权限，
-     * 这里只记录日志，真正的引导在设置界面完成。
+     * 记录存储权限状态。
+     *
+     * 安卓 11 及以上必须由用户在设置里手动授予"所有文件访问权限"，
+     * 这里只做记录，申请入口在 [ServerSettingsActivity]。
      */
-    private fun requestLegacyStorageIfNeeded(context: Context) {
+    private fun logStorageAccess() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             val granted = android.os.Environment.isExternalStorageManager()
             Logger.info(TAG, "All-files access granted: $granted")
+            if (!granted) {
+                Logger.warning(
+                    TAG,
+                    "Minecraft cannot read its files without MANAGE_EXTERNAL_STORAGE; " +
+                            "open the settings screen and grant it."
+                )
+            }
         }
-    }
-
-    /**
-     * 生成去设置页用的 Intent
-     */
-    fun allFilesAccessIntent(context: Context): android.content.Intent {
-        return android.content.Intent(
-            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-            android.net.Uri.parse("package:${context.packageName}")
-        )
     }
 }
