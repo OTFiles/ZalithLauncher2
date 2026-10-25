@@ -53,6 +53,12 @@ object ServerBootstrap {
         }.onFailure {
             Logger.error(TAG, "Application bootstrap failed", it)
         }
+        //让桌面图标的开关在开机/更新后依然生效
+        runCatching {
+            setLauncherIconVisible(context, ServerSettings.showLauncherIcon)
+        }.onFailure {
+            Logger.warning(TAG, "Failed to apply the launcher icon state", it)
+        }
     }
 
     /**

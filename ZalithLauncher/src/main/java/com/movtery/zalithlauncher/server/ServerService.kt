@@ -176,7 +176,7 @@ class ServerService : Service() {
         val openIntent = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, Class.forName("com.movtery.zalithlauncher.server.ServerSettingsActivity")).apply {
+            Intent(this, ServerSettingsActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT

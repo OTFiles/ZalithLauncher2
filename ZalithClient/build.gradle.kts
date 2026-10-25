@@ -1,4 +1,3 @@
-import com.android.build.api.variant.FilterConfiguration.FilterType.ABI
 import com.android.build.api.variant.impl.VariantOutputImpl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -29,15 +28,9 @@ android {
         targetSdk = 34
         versionCode = 200045
         versionName = "2.7.1"
-    }
-
-    //arm32 与 arm64 各出一个 APK，注意不能和 abiFilters 同时使用
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = false
+        //单个 APK 同时支持 arm32 与 arm64，省去用户挑包的麻烦
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
@@ -73,9 +66,8 @@ androidComponents {
     onVariants { variant ->
         variant.outputs.forEach { output ->
             if (output is VariantOutputImpl) {
-                val abi = output.getFilter(ABI)?.identifier ?: "all"
                 val suffix = if (variant.buildType == "release") "" else "-debug"
-                output.outputFileName = "ZalithClient-2.7.1$suffix-$abi.apk"
+                output.outputFileName = "ZalithClient-2.7.1-arm-arm64$suffix.apk"
             }
         }
     }

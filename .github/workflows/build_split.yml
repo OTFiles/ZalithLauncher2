@@ -5,6 +5,11 @@ on:
     branches:
       - '**'
   workflow_dispatch:
+    inputs:
+      server_arch:
+        description: 'Server ABI (arm64 / all)'
+        required: false
+        default: 'arm64'
   release:
     types:
       - published
@@ -15,6 +20,7 @@ permissions:
 jobs:
   # ============================================================
   # 服务端：在性能较好的设备上运行游戏并串流出去
+  # 默认只打 arm64（体积小一半以上），需要 arm32 时用 workflow_dispatch 传 all
   # ============================================================
   server:
     runs-on: ubuntu-latest
@@ -37,8 +43,39 @@ jobs:
       - name: Build server APK
         run: |
           chmod +x gradlew
-          #arm64 + armeabi-v7a 合并进同一个 APK
-          ./gradlew :ZalithLauncher:assembleRelease -Darch=all --stacktrace
+          ARCH="${{ github.event.inputs.server_arch }}"
+          if [ -z "$ARCH" ]; then ARCH=arm64; fi
+          echo "Server arch: $ARCH"
+          ./gradlew :ZalithLauncher:assembleRelease -Darch=$ARCH --stacktrace
+
+      - name: Verify server APK
+        run: |
+          set -e
+          APK=$(find ZalithLauncher/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "APK: $APK"
+          ls -lh "$APK"
+          AAPT=$(ls $ANDROID_HOME/build-tools/*/aapt2 | tail -1)
+          BADGING=$("$AAPT" dump badging "$APK")
+          echo "$BADGING" | grep -E '^(package|native-code|sdkVersion|targetSdkVersion)'
+          # 包名必须是服务端专用
+          echo "$BADGING" | grep -q "package: name='com.movtery.zalithlauncher.server'" \
+            || { echo "::error::unexpected package name"; exit 1; }
+          # 桌面图标必须是关闭状态（activity-alias enabled=false）
+          TREEXML=$("$AAPT" dump xmltree --file AndroidManifest.xml "$APK")
+          if echo "$TREEXML" | grep -A6 'ServerIconAlias' | grep -q 'enabled.*false'; then
+            echo "OK: launcher icon disabled by default"
+          else
+            echo "::error::ServerIconAlias must be disabled by default"; exit 1
+          fi
+          # 设置界面必须可被外部打开
+          echo "$TREEXML" | grep -q 'com.movtery.zalithlauncher.server.action.SETTINGS' \
+            || { echo "::error::missing exported SETTINGS action"; exit 1; }
+          # 开机自启接收器必须存在
+          echo "$TREEXML" | grep -q 'ServerBootReceiver' \
+            || { echo "::error::missing boot receiver"; exit 1; }
+          # 前台服务必须存在
+          echo "$TREEXML" | grep -q 'ServerService' \
+            || { echo "::error::missing foreground service"; exit 1; }
 
       - name: Upload server APK
         uses: actions/upload-artifact@v4
@@ -48,7 +85,7 @@ jobs:
           if-no-files-found: error
 
   # ============================================================
-  # 客户端：低配设备用，arm32/arm64 各一个 APK
+  # 客户端：低配设备用，单个 APK 同时支持 arm32 + arm64
   # ============================================================
   client:
     runs-on: ubuntu-latest
@@ -68,30 +105,36 @@ jobs:
           cache-read-only: false
           add-job-summary: "on-failure"
 
-      - name: Build client APKs (arm64-v8a + armeabi-v7a)
+      - name: Build client APK
         run: |
           chmod +x gradlew
           ./gradlew :ZalithClient:assembleRelease --stacktrace
 
-      - name: Collect APKs
+      - name: Verify client APK
         run: |
-          mkdir -p out
-          find ZalithClient/build/outputs/apk/release -name "*.apk" -exec cp {} out/ \;
-          ls -lh out
-          test "$(find out -name '*.apk' | wc -l)" -ge 2
+          set -e
+          APK=$(find ZalithClient/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "APK: $APK"
+          ls -lh "$APK"
+          AAPT=$(ls $ANDROID_HOME/build-tools/*/aapt2 | tail -1)
+          BADGING=$("$AAPT" dump badging "$APK")
+          echo "$BADGING" | grep -E '^(package|native-code|sdkVersion|targetSdkVersion)'
+          echo "$BADGING" | grep -q "package: name='com.movtery.zalithlauncher.client'" \
+            || { echo "::error::unexpected package name"; exit 1; }
+          # 客户端必须同时带 arm32 和 arm64
+          echo "$BADGING" | grep -q "native-code:.*arm64-v8a" \
+            || { echo "::error::missing arm64-v8a"; exit 1; }
+          echo "$BADGING" | grep -q "armeabi-v7a" \
+            || { echo "::error::missing armeabi-v7a"; exit 1; }
+          # 客户端必须有桌面图标
+          echo "$BADGING" | grep -q "launchable-activity" \
+            || { echo "::error::client must be launchable"; exit 1; }
 
-      - name: Upload client APK (arm64-v8a)
+      - name: Upload client APK
         uses: actions/upload-artifact@v4
         with:
-          name: ZalithClient-arm64-v8a
-          path: out/*arm64-v8a*.apk
-          if-no-files-found: error
-
-      - name: Upload client APK (armeabi-v7a)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ZalithClient-armeabi-v7a
-          path: out/*armeabi-v7a*.apk
+          name: ZalithClient-arm-arm64
+          path: ZalithClient/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
   # ============================================================
@@ -112,8 +155,9 @@ jobs:
           mkdir -p apks
           find ./artifacts -name "*.apk" -type f -exec cp {} apks/ \;
           ls -lh apks
+          test "$(ls apks/*.apk | wc -l)" -ge 2
 
-      - name: Upload to release
+      - name: Publish
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}
