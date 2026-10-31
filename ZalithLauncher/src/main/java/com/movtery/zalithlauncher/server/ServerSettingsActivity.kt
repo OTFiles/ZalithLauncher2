@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -47,6 +48,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -120,9 +122,51 @@ class ServerSettingsActivity : ComponentActivity() {
         }
     }
 
-    /** 申请屏幕/音频录制授权（音频串流需要） */
+    /**
+     * `RECORD_AUDIO` 是 AudioPlaybackCapture 的前置条件，必须先拿到运行时权限，
+     * 否则 AudioRecord 初始化会失败（表现为"有画面没声音"）。
+     */
+    private val requestRecordAudio = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        Logger.info(TAG, "RECORD_AUDIO granted: $granted")
+        if (granted) {
+            launchCaptureIntent()
+        } else {
+            android.widget.Toast.makeText(
+                this,
+                "Audio capture needs the microphone permission",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    /**
+     * 申请屏幕/音频录制授权（系统采集模式需要）。
+     *
+     * 顺序：先要 RECORD_AUDIO 运行时权限，再弹 MediaProjection 授权框。
+     */
     fun requestMediaProjection() {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+            android.widget.Toast.makeText(
+                this,
+                "System audio capture requires Android 10 or newer",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            launchCaptureIntent()
+        } else {
+            requestRecordAudio.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun launchCaptureIntent() {
         val manager = getSystemService(android.media.projection.MediaProjectionManager::class.java)
             ?: return
         runCatching {
@@ -166,7 +210,7 @@ private fun ServerSettingsScreen(activity: ServerSettingsActivity) {
     var keepAlive by remember { mutableStateOf(ServerSettings.keepAlive) }
     var showIcon by remember { mutableStateOf(ServerSettings.showLauncherIcon) }
     var autoLaunch by remember { mutableStateOf(ServerSettings.autoLaunchGame) }
-    var streamAudio by remember { mutableStateOf(ServerSettings.streamAudio) }
+    var audioSource by remember { mutableStateOf(ServerSettings.audioSource()) }
 
     var statusText by remember { mutableStateOf("") }
     var addresses by remember { mutableStateOf(listOf<String>()) }
@@ -365,10 +409,38 @@ private fun ServerSettingsScreen(activity: ServerSettingsActivity) {
                         autoLaunch = it
                         ServerSettings.autoLaunchGame = it
                     }
-                    SwitchRow("Stream game audio (needs capture permission)", streamAudio) {
-                        streamAudio = it
-                        ServerSettings.streamAudio = it
-                        if (it) activity.requestMediaProjection()
+                    Text("Game audio", style = MaterialTheme.typography.bodyMedium)
+                    AudioSourceOption(
+                        title = "Intercept in game (recommended)",
+                        summary = "The host device stays silent, no permission needed",
+                        selected = audioSource == AudioPipeline.AudioSource.WAVE_PIPE
+                    ) {
+                        audioSource = AudioPipeline.AudioSource.WAVE_PIPE
+                        ServerSettings.setAudioSource(audioSource)
+                        ServerService.refresh(activity)
+                    }
+                    AudioSourceOption(
+                        title = "System playback capture",
+                        summary = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                            "Host keeps playing sound; needs screen/audio permission"
+                        } else {
+                            "Requires Android 10 or newer"
+                        },
+                        enabled = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q,
+                        selected = audioSource == AudioPipeline.AudioSource.SYSTEM_CAPTURE
+                    ) {
+                        audioSource = AudioPipeline.AudioSource.SYSTEM_CAPTURE
+                        ServerSettings.setAudioSource(audioSource)
+                        activity.requestMediaProjection()
+                        ServerService.refresh(activity)
+                    }
+                    AudioSourceOption(
+                        title = "Off",
+                        summary = "Video only",
+                        selected = audioSource == AudioPipeline.AudioSource.OFF
+                    ) {
+                        audioSource = AudioPipeline.AudioSource.OFF
+                        ServerSettings.setAudioSource(audioSource)
                         ServerService.refresh(activity)
                     }
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -459,6 +531,42 @@ private fun NumberField(
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = modifier
     )
+}
+
+/**
+ * 单选行：用于音频来源这类互斥选项
+ */
+@Composable
+private fun AudioSourceOption(
+    title: String,
+    summary: String,
+    selected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick, enabled = enabled)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.outline
+            )
+            Text(
+                summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
 }
 
 @Composable

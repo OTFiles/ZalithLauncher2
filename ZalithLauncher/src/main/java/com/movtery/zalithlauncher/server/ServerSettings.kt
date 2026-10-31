@@ -152,12 +152,33 @@ object ServerSettings {
             mmkv.encode(KEY_PENDING_LAUNCH, value)
         }
 
-    /** 是否把游戏声音一起串流（需要一次性的屏幕/音频录制授权） */
-    var streamAudio: Boolean
-        get() = mmkv.decodeBool(KEY_STREAM_AUDIO, true)
-        set(value) {
-            mmkv.encode(KEY_STREAM_AUDIO, value)
+    /** 音频来源（旧布尔开关的迁移目标） */
+    private const val KEY_AUDIO_SOURCE = "stream_server_audio_source"
+
+    /**
+     * 音频来源。
+     *
+     * 默认 [AudioPipeline.AudioSource.WAVE_PIPE]：拦截 OpenAL 输出，
+     * 宿主设备不出声，也不需要任何权限。这是"服务器"这个定位下最合适的做法。
+     */
+    fun audioSource(): AudioPipeline.AudioSource {
+        val raw = mmkv.decodeString(KEY_AUDIO_SOURCE, null)
+        if (raw != null) {
+            return runCatching { AudioPipeline.AudioSource.valueOf(raw) }
+                .getOrDefault(AudioPipeline.AudioSource.WAVE_PIPE)
         }
+        //兼容旧版本：过去只有一个"是否串流音频"的开关
+        val legacyEnabled = mmkv.decodeBool(KEY_STREAM_AUDIO, true)
+        return if (legacyEnabled) {
+            AudioPipeline.AudioSource.WAVE_PIPE
+        } else {
+            AudioPipeline.AudioSource.OFF
+        }
+    }
+
+    fun setAudioSource(source: AudioPipeline.AudioSource) {
+        mmkv.encode(KEY_AUDIO_SOURCE, source.name)
+    }
 
     /** 音频采集是否真的起来了（只读，运行期状态） */
     @Volatile

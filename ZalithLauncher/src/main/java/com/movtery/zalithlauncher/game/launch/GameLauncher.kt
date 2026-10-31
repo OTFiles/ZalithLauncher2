@@ -93,6 +93,29 @@ class GameLauncher(
     private val offlineServer = OfflineYggdrasilServer(0)
 
     private val version = config.version
+
+    /**
+     * 服务端用来拦截游戏声音：把 OpenAL 后端换成 `wave`，
+     * 声音写进管道而不是扬声器。普通启动器留空即可。
+     */
+    private var audioBackendOverride: String? = null
+    private var audioEnvProvider: (() -> Map<String, String>)? = null
+
+    /**
+     * 启用音频拦截
+     * @param backend OpenAL 后端名（`wave`）
+     * @param envProvider 返回额外环境变量（ALSOFT_CONF 等）
+     */
+    fun interceptAudio(backend: String, envProvider: () -> Map<String, String>) {
+        audioBackendOverride = backend
+        audioEnvProvider = envProvider
+    }
+
+    override val audioBackend: String
+        get() = audioBackendOverride ?: super.audioBackend
+
+    override fun audioEnvOverrides(): Map<String, String> =
+        audioEnvProvider?.invoke() ?: emptyMap()
     private val usingAccount = if (version.offlineAccountLogin) {
         //使用临时离线账号启动游戏
         config.account.copy(
@@ -189,6 +212,10 @@ class GameLauncher(
 
     override fun initEnv(screenSize: IntSize): MutableMap<String, String> {
         val envMap = super.initEnv(screenSize)
+        //服务端拦截音频时，把 OpenAL 的配置文件路径一并交给游戏
+        audioEnvOverrides().forEach { (key, value) ->
+            if (value.isNotEmpty()) envMap[key] = value
+        }
 
         envMap["DRIVER_PATH"] = DriverPluginManager.getDriver(version.getDriver()).path
 

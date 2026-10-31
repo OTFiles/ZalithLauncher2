@@ -127,6 +127,20 @@ abstract class Launcher(
 
     abstract suspend fun launch(screenSize: IntSize): Int
     abstract fun chdir(): String
+
+    /**
+     * OpenAL 后端。
+     *
+     * 普通启动器用 `opensl`（直接放声）；串流服务端需要用 `wave`
+     * 把游戏声音写进管道，这样宿主设备本地不会发声，声音全部留给客户端。
+     */
+    protected open val audioBackend: String = "opensl"
+
+    /**
+     * 额外的音频相关环境变量（ALSOFT_CONF / ALSOFT_LOCAL_PATH 等）
+     */
+    protected open fun audioEnvOverrides(): Map<String, String> = emptyMap()
+
     abstract fun getLogFile(): File
     abstract fun exit()
 
@@ -505,7 +519,12 @@ abstract class Launcher(
             map["MOD_ANDROID_RUNTIME"] = PathManager.DIR_RUNTIME_MOD?.absolutePath ?: ""
             map["DALVIK_JAVAVM"] = ZLBridge.getJavaVMPointer().toString()
             map["DALVIK_APPLICATION"] = ZLBridge.jObjectToString(GlobalContext.applicationContext)
-            map["ALSOFT_DRIVERS"] = "opensl"
+            map["ALSOFT_DRIVERS"] = audioBackend
+
+            //服务端把游戏声音导流到管道时，额外指定配置文件与本地配置查找路径
+            audioEnvOverrides().forEach { (key, value) ->
+                if (value.isNotEmpty()) map[key] = value
+            }
 
             if (AllSettings.dumpShaders.getValue()) map["LIBGL_VGPU_DUMP"] = "1"
             if (AllSettings.zinkPreferSystemDriver.getValue()) map["POJAV_ZINK_PREFER_SYSTEM_DRIVER"] = "1"

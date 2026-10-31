@@ -246,6 +246,23 @@ object GameSession {
             },
             openPath = { /* 服务端没有文件浏览界面 */ }
         )
+
+        //拦截游戏声音：OpenAL 后端换成 wave，混音结果写进管道而不是扬声器。
+        //必须在游戏启动前设置，否则 OpenAL 已经用 opensl 初始化了。
+        if (ServerSettings.audioSource() == AudioPipeline.AudioSource.WAVE_PIPE) {
+            val overrides = ServerStreamEngine.instance.audioEnvOverrides()
+            if (overrides.isNotEmpty()) {
+                launcher.interceptAudio("wave") { overrides }
+                Logger.info(TAG, "Game audio is intercepted, the host device stays silent")
+            } else {
+                Logger.warning(
+                    TAG,
+                    "Audio intercept requested but the wave pipe is not ready; " +
+                            "the game will use the default OpenAL backend"
+                )
+            }
+        }
+
         gameLauncher = launcher
 
         //游戏主循环会一直阻塞到游戏退出，必须放在独立线程

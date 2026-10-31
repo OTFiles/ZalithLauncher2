@@ -58,7 +58,7 @@ class ServerStreamEngine private constructor() {
     private var acceptThread: Thread? = null
 
     private var encoder: VideoEncoder? = null
-    private var audioCapture: GameAudioCapture? = null
+    private var audioPipeline: AudioPipeline? = null
 
     /** 由设置界面申请到的录制授权，音频串流的关键 */
     @Volatile
@@ -172,8 +172,9 @@ class ServerStreamEngine private constructor() {
         clients.clear()
         progressThread?.interrupt()
         progressThread = null
-        runCatching { audioCapture?.stop() }
-        audioCapture = null
+        runCatching { audioPipeline?.cleanup() }
+        audioPipeline = null
+        ServerSettings.audioActive = false
         encoder?.stop()
         encoder = null
         GameSession.surfaceProvider = null
@@ -183,28 +184,82 @@ class ServerStreamEngine private constructor() {
     // region 编码器
 
     /**
-     * 有授权就启动音频采集；没有就静默跳过（画面照常串流）
+     * 启动音频管线。
+     *
+     * 默认走 OpenAL 拦截（wave 后端）：宿主设备完全静音，不需要任何权限。
+     * 也可以切到系统采集（需要 MediaProjection 授权），或直接关闭。
      */
     private fun startAudioIfPossible() {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
-        if (!ServerSettings.streamAudio) return
-        val projection = mediaProjection
-        if (projection == null) {
-            Log.i(TAG, "No media projection token, audio streaming disabled")
+        val source = ServerSettings.audioSource()
+        if (source == AudioPipeline.AudioSource.OFF) {
+            Log.i(TAG, "Audio streaming disabled by settings")
+            return
+        }
+        if (!AudioPipeline.isSourceSupported(source)) {
+            Log.i(TAG, "Audio source $source is not supported on this device")
             return
         }
         runCatching {
-            val capture = GameAudioCapture(projection) { frame ->
-                broadcastAudio(frame)
-            }
-            if (capture.start()) {
-                audioCapture = capture
+            val pipeline = AudioPipeline(
+                source = source,
+                onFrame = { frame -> broadcastAudio(frame) },
+                onFailure = { Log.w(TAG, "Audio pipeline error", it) }
+            )
+            if (pipeline.start(mediaProjection)) {
+                audioPipeline = pipeline
                 ServerSettings.audioActive = true
+                Log.i(TAG, "Audio streaming started via ${pipeline.activeSource}")
+                //wave 拦截要等到游戏真正出声才有 PCM，这里做个提示性检查
+                if (pipeline.activeSource == AudioPipeline.AudioSource.WAVE_PIPE) {
+                    warnIfSilent(pipeline)
+                }
+            } else {
+                //拦截失败时退回系统采集（如果用户有授权），保证"至少有声音"
+                if (source == AudioPipeline.AudioSource.WAVE_PIPE && mediaProjection != null) {
+                    Log.i(TAG, "Falling back to system audio capture")
+                    val fallback = AudioPipeline(
+                        source = AudioPipeline.AudioSource.SYSTEM_CAPTURE,
+                        onFrame = { frame -> broadcastAudio(frame) },
+                        onFailure = { Log.w(TAG, "Audio fallback error", it) }
+                    )
+                    if (fallback.start(mediaProjection)) {
+                        audioPipeline = fallback
+                        ServerSettings.audioActive = true
+                    }
+                }
             }
         }.onFailure {
-            Log.w(TAG, "Audio capture unavailable", it)
+            Log.w(TAG, "Audio pipeline unavailable", it)
         }
     }
+
+    /**
+     * 一段时间内拿不到 PCM 就提示：可能是 OpenAL 没有走 wave 后端
+     * （例如用了不走 OpenAL 的音频实现）。
+     */
+    private fun warnIfSilent(pipeline: AudioPipeline) {
+        Thread({
+            runCatching { Thread.sleep(20_000) }
+            if (!running.get()) return@Thread
+            if (audioPipeline !== pipeline) return@Thread
+            if (!pipeline.pcmReceived) {
+                Log.w(
+                    TAG,
+                    "No PCM from the OpenAL wave pipe after 20s. " +
+                            "Audio intercept may not be working with the current renderer."
+                )
+            }
+        }, "ZalithAudioWatchdog").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    /**
+     * 供 GameLauncher 注入 OpenAL 配置用。
+     * 必须在游戏启动前调用，否则 wave 后端拿不到配置文件。
+     */
+    fun audioEnvOverrides(): Map<String, String> = audioPipeline?.pipeEnvOverrides() ?: emptyMap()
 
     private fun broadcastAudio(frame: ByteArray) {
         if (clients.isEmpty()) return
@@ -246,7 +301,7 @@ class ServerStreamEngine private constructor() {
             bitrateKbps = state.bitrateKbps,
             grabbed = RemoteInput.grabbed,
             currentVersion = state.currentVersion,
-            audio = audioCapture != null
+            audio = audioPipeline != null
         )
         val payload = gson.toJson(meta)
         clients.forEach { it.sendFrame(StreamProtocol.TYPE_META, payload) }
@@ -366,7 +421,7 @@ class ServerStreamEngine private constructor() {
             bitrateKbps = state.bitrateKbps,
             grabbed = RemoteInput.grabbed,
             currentVersion = state.currentVersion,
-            audio = audioCapture != null
+            audio = audioPipeline != null
         )
     }
     // endregion
