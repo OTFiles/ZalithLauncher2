@@ -113,6 +113,34 @@ Minecraft 渲染（**零拷贝**，不需要屏幕录制）→ 采集到的访�
 
 ---
 
+## 3.5 音频：拦截 OpenAL，而不是录屏
+
+服务端**默认不接受任何录音/录屏权限**，而是把 OpenAL 的后端从 `opensl` 换成 `wave`：
+
+```
+ALSOFT_DRIVERS = wave
+ALSOFT_CONF    = <cache>/alsoft.conf     # 里面写 [wave] file=<cache>/stream_audio.pcm
+```
+
+`libopenal.so` 里编译了 wave 后端（`WaveBackendFactory` / "Wave File Writer"），
+它会把混音结果写进指定文件而不是扬声器，于是：
+
+- **宿主设备完全静音**，不会有"服务器自己莫名其妙出声"的问题
+- 不需要 `RECORD_AUDIO`、不需要 `MediaProjection`、安卓 8 起即可用
+- 拿到的就是裸 PCM（`wave.cpp` 在 FIFO 上的 `seekp` 会静默失败，WAV 头写不进去），
+  48kHz / 双声道 / PCM16 直接喂给 AAC 编码器
+
+设置界面里可选三种来源：
+
+| 选项 | 宿主是否发声 | 权限 | 版本要求 |
+| --- | --- | --- | --- |
+| **Intercept in game**（默认） | 静音 | 无 | Android 8+ |
+| System playback capture | 正常发声 | `RECORD_AUDIO` + MediaProjection | Android 10+ |
+| Off | 静音 | 无 | — |
+
+拦截方式下如果 20 秒收不到 PCM（例如某些渲染器不经 OpenAL），日志会给出警告，
+并可在设置里改回系统采集。
+
 ## 4. 协议（`StreamCore`）
 
 单条 TCP，帧格式 `[1B type][4B big-endian length][payload]`：
@@ -159,7 +187,8 @@ ZalithLauncher/                  服务端（在原启动器上改造）
     ServerSettingsActivity.kt    设置界面（Compose）
     ServerStreamEngine.kt        TCP 服务、鉴权、码流分发、远程指令
     VideoEncoder.kt              MediaCodec H.264，硬件优先 + 软件兜底
-    GameAudioCapture.kt          AudioPlaybackCapture → AAC（Android 10+）
+    AudioPipeReader.kt           OpenAL wave 后端 → 裸 PCM 管道（mkfifo，可退化）
+    AudioPipeline.kt             PCM → AAC，两种来源（拦截 / 系统采集）
     GameSession.kt               无界面启动 MC（渲染到编码器 Surface）
     RemoteInput.kt               网络输入 → GLFW/LWJGL 事件
     GameRuntime.kt               进程重启与续跑（JVM 单次生命周期）
@@ -185,7 +214,7 @@ ZalithClient/                    客户端（全新轻量模块）
 ## 6. 已知限制
 
 - 服务端默认只打 arm64；32 位设备需要手动触发 workflow 选 `all`
-- 音频串流需要 Android 10+ 且手动授权「录制权限」，未授权时静默降级为无声音
+- 音频串流默认走 OpenAL 拦截（见下），不需要任何权限；系统采集方式需要 Android 10+ 与授权
 - 停游戏 / 游戏退出会重启服务端进程（JVM 无法在同一进程内二次启动），
   重连客户端会在约 1~2 秒后自动恢复
 - 串流为单码流广播，多客户端共享同一画质；客户端数量多时建议降低码率
